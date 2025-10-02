@@ -25,8 +25,13 @@ app.use(express.json());
 // CORS для Mini App
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
     next();
 });
 
@@ -101,7 +106,7 @@ app.post('/addtask', async (req, res) => {
         try {
             await bot.sendMessage(
                 taskData.userId, 
-                `✅ Задача "${taskData.title}" добавлена!\n📅 Напоминание придет за 4 часа до начала.`
+                `✅ Задача "${taskData.title}" добавлена!\n📅 Напоминание придет за 5 часов до начала.`
             );
         } catch (tgError) {
             console.error('❌ Не удалось отправить сообщение в Telegram:', tgError.message);
@@ -151,6 +156,131 @@ app.post('/gettasks', async (req, res) => {
     }
 });
 
+// Endpoint для обновления задачи
+app.put('/updatetask', async (req, res) => {
+    try {
+        const { taskId, userId, title, datetime } = req.body;
+        
+        console.log('✏️ Запрос на обновление задачи:', { taskId, userId, title, datetime });
+
+        if (!taskId || !userId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'taskId и userId обязательны' 
+            });
+        }
+
+        const tasks = await getTasks();
+        const taskIndex = tasks.findIndex(task => task.id === taskId && task.userId == userId);
+        
+        if (taskIndex === -1) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Задача не найдена' 
+            });
+        }
+
+        // Обновляем поля
+        if (title) tasks[taskIndex].title = title;
+        if (datetime) {
+            tasks[taskIndex].datetime = datetime;
+            tasks[taskIndex].notified = false; // Сбрасываем уведомление при изменении времени
+        }
+
+        const saved = await saveTasks(tasks);
+
+        if (!saved) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Ошибка сохранения изменений' 
+            });
+        }
+
+        // Отправляем уведомление пользователю
+        try {
+            await bot.sendMessage(
+                userId, 
+                `✏️ Задача обновлена!\n"${tasks[taskIndex].title}"\n📅 Новое время: ${new Date(tasks[taskIndex].datetime).toLocaleString('ru-RU')}`
+            );
+        } catch (tgError) {
+            console.error('❌ Не удалось отправить сообщение в Telegram:', tgError.message);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Задача обновлена',
+            task: tasks[taskIndex]
+        });
+
+    } catch (error) {
+        console.error('❌ Ошибка обновления задачи:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Ошибка при обновлении задачи' 
+        });
+    }
+});
+
+// Endpoint для удаления задачи
+app.delete('/deletetask', async (req, res) => {
+    try {
+        const { taskId, userId } = req.body;
+        
+        console.log('🗑️ Запрос на удаление задачи:', { taskId, userId });
+
+        if (!taskId || !userId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'taskId и userId обязательны' 
+            });
+        }
+
+        const tasks = await getTasks();
+        const taskIndex = tasks.findIndex(task => task.id === taskId && task.userId == userId);
+        
+        if (taskIndex === -1) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Задача не найдена' 
+            });
+        }
+
+        const deletedTask = tasks[taskIndex];
+        tasks.splice(taskIndex, 1); // Удаляем задачу
+
+        const saved = await saveTasks(tasks);
+
+        if (!saved) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Ошибка сохранения изменений' 
+            });
+        }
+
+        // Отправляем уведомление пользователю
+        try {
+            await bot.sendMessage(
+                userId, 
+                `🗑️ Задача удалена:\n"${deletedTask.title}"`
+            );
+        } catch (tgError) {
+            console.error('❌ Не удалось отправить сообщение в Telegram:', tgError.message);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Задача удалена'
+        });
+
+    } catch (error) {
+        console.error('❌ Ошибка удаления задачи:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Ошибка при удалении задачи' 
+        });
+    }
+});
+
 // Команда /start
 bot.onText(/\/start/, (msg) => {
     const userId = msg.chat.id;
@@ -162,7 +292,7 @@ bot.onText(/\/start/, (msg) => {
         }]]
     };
 
-    const welcomeMessage = `👋 Добро пожаловать в менеджер семейных задач!\n\n📝 Создавайте задачи и получайте напоминания за 4 часа до начала.\n\nНажмите кнопку ниже чтобы открыть приложение:`;
+    const welcomeMessage = `👋 Добро пожаловать в менеджер семейных задач!\n\n📝 Создавайте задачи и получайте напоминания за 5 часов до начала.\n\n💡 Теперь вы можете редактировать и удалять задачи!\n\nНажмите кнопку ниже чтобы открыть приложение:`;
 
     bot.sendMessage(userId, welcomeMessage, {
         reply_markup: keyboard
@@ -191,6 +321,37 @@ bot.onText(/\/mytasks/, async (msg) => {
             message += `${index + 1}. ${task.title}\n   📅 ${date}\n   ${status}\n\n`;
         });
 
+        message += '💡 Для редактирования или удаления задач откройте Mini App через /start';
+
+        await bot.sendMessage(userId, message);
+    } catch (error) {
+        console.error('❌ Ошибка получения задач:', error);
+        await bot.sendMessage(userId, '❌ Ошибка при загрузке задач');
+    }
+});
+
+// Команда /manage - управление задачами
+bot.onText(/\/manage/, async (msg) => {
+    const userId = msg.chat.id;
+    
+    try {
+        const tasks = await getTasks();
+        const userTasks = tasks.filter(task => task.userId == userId);
+        
+        if (userTasks.length === 0) {
+            await bot.sendMessage(userId, '📝 У вас пока нет задач для управления.');
+            return;
+        }
+
+        let message = '📋 Ваши задачи (для управления используйте Mini App):\n\n';
+        userTasks.forEach((task, index) => {
+            const date = new Date(task.datetime).toLocaleString('ru-RU');
+            const status = task.notified ? '🔔' : '⏰';
+            message += `${index + 1}. ${task.title}\n   📅 ${date} ${status}\n   🆔 ID: ${task.id}\n\n`;
+        });
+
+        message += '💡 Для редактирования или удаления задач откройте Mini App через /start';
+
         await bot.sendMessage(userId, message);
     } catch (error) {
         console.error('❌ Ошибка получения задач:', error);
@@ -206,9 +367,12 @@ bot.onText(/\/help/, (msg) => {
 
 /start - Запустить бота и открыть приложение
 /mytasks - Показать все ваши задачи
+/manage - Показать задачи с ID для управления
 /help - Показать эту справку
 
-📱 Основной функционал доступен через Mini App (кнопка в /start)`;
+📱 Основной функционал доступен через Mini App (кнопка в /start)
+
+✨ Новое: редактирование и удаление задач!`;
 
     bot.sendMessage(userId, helpMessage).catch(error => {
         console.error('❌ Ошибка отправки сообщения:', error.message);
@@ -232,8 +396,8 @@ async function checkNotifications() {
             const timeDiff = taskDate.getTime() - now.getTime();
             const hoursDiff = timeDiff / (1000 * 60 * 60);
 
-            // Если до задачи осталось 4 часа или меньше
-            if (hoursDiff <= 7 && hoursDiff > 0) {
+            // Если до задачи осталось 5 часов или меньше
+            if (hoursDiff <= 5 && hoursDiff > 0) {
                 const message = `🔔 Напоминание!\nЧерез ${Math.round(hoursDiff)} часа начнется:\n"${task.title}"`;
                 
                 try {
@@ -267,7 +431,8 @@ app.get('/', (req, res) => {
         message: 'Task Manager Bot is running',
         service: 'Telegram Tasks Bot',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development'
+        environment: process.env.NODE_ENV || 'development',
+        features: ['create', 'read', 'update', 'delete', 'notifications']
     });
 });
 
@@ -286,7 +451,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
     console.log(`📱 Mini App URL: ${MINI_APP_URL}`);
     console.log(`🔗 Health check: https://railwaybot-production-e3bc.up.railway.app/health`);
-    console.log('✅ Бот готов к работе с polling!');
+    console.log('✅ Бот готов к работе с полным управлением задачами!');
 });
 
 // Обработка ошибок бота
