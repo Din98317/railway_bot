@@ -1,7 +1,7 @@
 {
-  "name": "telegram-tasks-bot",
+  "name": "telegram-family-tasks-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for task management with mini app",
+  "description": "Telegram bot for family task management with mini app",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
