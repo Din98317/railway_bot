@@ -11,11 +11,24 @@ const JSONBIN_ID = process.env.JSONBIN_ID;
 const JSONBIN_ACCESS_KEY = process.env.JSONBIN_ACCESS_KEY;
 const MINI_APP_URL = process.env.MINI_APP_URL;
 
-// Используем webhook вместо polling
-const bot = new TelegramBot(TOKEN);
+// Используем polling (проще и надежнее)
+const bot = new TelegramBot(TOKEN, { 
+    polling: true,
+    request: {
+        timeout: 30000  // Увеличиваем таймаут для Railway
+    }
+});
 
 // Middleware для обработки JSON
 app.use(express.json());
+
+// CORS для Mini App
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    next();
+});
 
 // URL для работы с JSONBin
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`;
@@ -32,7 +45,7 @@ async function getTasks() {
         const response = await axios.get(JSONBIN_URL, { headers });
         return response.data.record.tasks || [];
     } catch (error) {
-        console.error('Ошибка получения задач:', error.message);
+        console.error('❌ Ошибка получения задач:', error.message);
         return [];
     }
 }
@@ -42,8 +55,10 @@ async function saveTasks(tasks) {
     try {
         await axios.put(JSONBIN_PUT_URL, { tasks }, { headers });
         console.log('✅ Задачи успешно сохранены');
+        return true;
     } catch (error) {
         console.error('❌ Ошибка сохранения задач:', error.message);
+        return false;
     }
 }
 
@@ -54,25 +69,56 @@ app.post('/addtask', async (req, res) => {
         
         console.log('📨 Получена новая задача:', taskData);
 
+        // Валидация данных
+        if (!taskData.userId || !taskData.title || !taskData.datetime) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Не все обязательные поля заполнены' 
+            });
+        }
+
         const newTask = {
             id: Date.now().toString(),
             userId: taskData.userId,
             title: taskData.title,
             datetime: taskData.datetime,
-            notified: false
+            notified: false,
+            createdAt: new Date().toISOString()
         };
 
         const tasks = await getTasks();
         tasks.push(newTask);
-        await saveTasks(tasks);
+        const saved = await saveTasks(tasks);
+
+        if (!saved) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Ошибка сохранения в базу данных' 
+            });
+        }
 
         // Отправляем уведомление пользователю
-        await bot.sendMessage(taskData.userId, `✅ Задача "${taskData.title}" добавлена!\n📅 Напоминание придет за 4 часа до начала.`);
+        try {
+            await bot.sendMessage(
+                taskData.userId, 
+                `✅ Задача "${taskData.title}" добавлена!\n📅 Напоминание придет за 4 часа до начала.`
+            );
+        } catch (tgError) {
+            console.error('❌ Не удалось отправить сообщение в Telegram:', tgError.message);
+        }
 
-        res.status(200).json({ success: true, message: 'Задача добавлена' });
+        res.status(200).json({ 
+            success: true, 
+            message: 'Задача добавлена',
+            taskId: newTask.id
+        });
+
     } catch (error) {
         console.error('❌ Ошибка добавления задачи:', error);
-        res.status(500).json({ success: false, error: 'Ошибка при добавлении задачи' });
+        res.status(500).json({ 
+            success: false, 
+            error: 'Внутренняя ошибка сервера' 
+        });
     }
 });
 
@@ -80,17 +126,32 @@ app.post('/addtask', async (req, res) => {
 app.post('/gettasks', async (req, res) => {
     try {
         const { userId } = req.body;
+        
+        if (!userId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'userId обязателен' 
+            });
+        }
+
         const tasks = await getTasks();
         const userTasks = tasks.filter(task => task.userId == userId);
         
-        res.status(200).json({ success: true, tasks: userTasks });
+        res.status(200).json({ 
+            success: true, 
+            tasks: userTasks,
+            count: userTasks.length
+        });
     } catch (error) {
         console.error('❌ Ошибка получения задач:', error);
-        res.status(500).json({ success: false, error: 'Ошибка при получении задач' });
+        res.status(500).json({ 
+            success: false, 
+            error: 'Ошибка при получении задач' 
+        });
     }
 });
 
-// Команды бота
+// Команда /start
 bot.onText(/\/start/, (msg) => {
     const userId = msg.chat.id;
     
@@ -105,6 +166,52 @@ bot.onText(/\/start/, (msg) => {
 
     bot.sendMessage(userId, welcomeMessage, {
         reply_markup: keyboard
+    }).catch(error => {
+        console.error('❌ Ошибка отправки сообщения:', error.message);
+    });
+});
+
+// Команда /mytasks - посмотреть задачи
+bot.onText(/\/mytasks/, async (msg) => {
+    const userId = msg.chat.id;
+    
+    try {
+        const tasks = await getTasks();
+        const userTasks = tasks.filter(task => task.userId == userId);
+        
+        if (userTasks.length === 0) {
+            await bot.sendMessage(userId, '📝 У вас пока нет задач. Создайте первую задачу через Mini App!');
+            return;
+        }
+
+        let message = '📋 Ваши задачи:\n\n';
+        userTasks.forEach((task, index) => {
+            const date = new Date(task.datetime).toLocaleString('ru-RU');
+            const status = task.notified ? '🔔 Уведомлено' : '⏰ Ожидает';
+            message += `${index + 1}. ${task.title}\n   📅 ${date}\n   ${status}\n\n`;
+        });
+
+        await bot.sendMessage(userId, message);
+    } catch (error) {
+        console.error('❌ Ошибка получения задач:', error);
+        await bot.sendMessage(userId, '❌ Ошибка при загрузке задач');
+    }
+});
+
+// Команда /help
+bot.onText(/\/help/, (msg) => {
+    const userId = msg.chat.id;
+    
+    const helpMessage = `📖 Доступные команды:
+
+/start - Запустить бота и открыть приложение
+/mytasks - Показать все ваши задачи
+/help - Показать эту справку
+
+📱 Основной функционал доступен через Mini App (кнопка в /start)`;
+
+    bot.sendMessage(userId, helpMessage).catch(error => {
+        console.error('❌ Ошибка отправки сообщения:', error.message);
     });
 });
 
@@ -116,6 +223,8 @@ async function checkNotifications() {
         
         console.log(`🔍 Проверка уведомлений... Найдено задач: ${tasks.length}`);
 
+        let notificationsSent = 0;
+
         for (const task of tasks) {
             if (task.notified) continue;
 
@@ -123,6 +232,7 @@ async function checkNotifications() {
             const timeDiff = taskDate.getTime() - now.getTime();
             const hoursDiff = timeDiff / (1000 * 60 * 60);
 
+            // Если до задачи осталось 4 часа или меньше
             if (hoursDiff <= 4 && hoursDiff > 0) {
                 const message = `🔔 Напоминание!\nЧерез ${Math.round(hoursDiff)} часа начнется:\n"${task.title}"`;
                 
@@ -130,13 +240,18 @@ async function checkNotifications() {
                     await bot.sendMessage(task.userId, message);
                     console.log(`✅ Уведомление отправлено пользователю ${task.userId} для задачи "${task.title}"`);
                     task.notified = true;
+                    notificationsSent++;
                 } catch (error) {
-                    console.error(`❌ Не удалось отправить уведомление:`, error.message);
+                    console.error(`❌ Не удалось отправить уведомление пользователю ${task.userId}:`, error.message);
                 }
             }
         }
 
-        await saveTasks(tasks);
+        if (notificationsSent > 0) {
+            await saveTasks(tasks);
+            console.log(`📨 Отправлено уведомлений: ${notificationsSent}`);
+        }
+
     } catch (error) {
         console.error('❌ Ошибка проверки уведомлений:', error);
     }
@@ -145,18 +260,14 @@ async function checkNotifications() {
 // Проверяем задачи каждую минуту
 nodeCron.schedule('* * * * *', checkNotifications);
 
-// Webhook для Telegram
-app.post('/webhook', (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-});
-
-// Health check endpoint
+// Health check endpoints
 app.get('/', (req, res) => {
     res.json({ 
         status: 'OK', 
         message: 'Task Manager Bot is running',
-        timestamp: new Date().toISOString()
+        service: 'Telegram Tasks Bot',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
@@ -164,7 +275,8 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'OK', 
         service: 'Task Manager Bot',
-        time: new Date().toLocaleString('ru-RU')
+        time: new Date().toLocaleString('ru-RU'),
+        uptime: process.uptime()
     });
 });
 
@@ -173,15 +285,28 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
     console.log(`📱 Mini App URL: ${MINI_APP_URL}`);
-    console.log('✅ Бот готов к работе!');
+    console.log(`🔗 Health check: https://railwaybot-production-e3bc.up.railway.app/health`);
+    console.log('✅ Бот готов к работе с polling!');
 });
 
-// Обработка ошибок
+// Обработка ошибок бота
 bot.on('error', (error) => {
     console.error('❌ Ошибка бота:', error);
 });
 
+bot.on('polling_error', (error) => {
+    console.error('❌ Ошибка polling:', error);
+});
+
+// Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('🔄 Получен SIGTERM, graceful shutdown...');
+    bot.stopPolling();
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    console.log('🔄 Получен SIGINT, остановка...');
+    bot.stopPolling();
     process.exit(0);
 });
