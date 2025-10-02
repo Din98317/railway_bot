@@ -6,7 +6,7 @@ const nodeCron = require('node-cron');
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8438607431:AAHQZWYuENj3af5THn8TgFWofTx0WyT8_gU';
 const JSONBIN_ID = process.env.JSONBIN_ID;
 const JSONBIN_ACCESS_KEY = process.env.JSONBIN_ACCESS_KEY;
-const MINI_APP_URL = process.env.MINI_APP_URL || 'https://github.com/Din98317/new_tasks_tg/blob/main/index.html';
+const MINI_APP_URL = process.env.MINI_APP_URL || 'new-tasks-tg.vercel.app';
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
