@@ -249,6 +249,42 @@ async function checkNotifications() {
     }
 }
 
+// Функция для автоматического удаления старых задач (старше 1 дня)
+async function cleanupOldTasks() {
+    try {
+        const tasks = await getTasks();
+        const now = new Date();
+        const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 1 день назад
+        
+        const initialLength = tasks.length;
+        const cleanedTasks = tasks.filter(task => {
+            const taskDate = new Date(task.datetime);
+            // Оставляем только задачи, которые еще не наступили или завершены менее 1 дня назад
+            return taskDate > oneDayAgo;
+        });
+        
+        if (cleanedTasks.length < initialLength) {
+            await saveTasks(cleanedTasks);
+            const removedCount = initialLength - cleanedTasks.length;
+            console.log(`🧹 Удалено ${removedCount} старых задач (старше 1 дня)`);
+            
+            // Логируем информацию об удаленных задачах
+            const removedTasks = tasks.filter(task => {
+                const taskDate = new Date(task.datetime);
+                return taskDate <= oneDayAgo;
+            });
+            
+            removedTasks.forEach(task => {
+                console.log(`   - Удалена: "${task.title}" от ${new Date(task.datetime).toLocaleString('ru-RU')}`);
+            });
+        } else {
+            console.log('🧹 Старые задачи не найдены (все задачи младше 1 дня)');
+        }
+    } catch (error) {
+        console.error('❌ Ошибка очистки старых задач:', error);
+    }
+}
+
 // Команда /start
 bot.onText(/\/start/, (msg) => {
     const userId = msg.chat.id;
@@ -850,6 +886,9 @@ nodeCron.schedule('*/5 * * * *', checkNotifications);
 
 // Дополнительно: проверка каждую минуту в пиковые часы (с 8 утра до 10 вечера)
 nodeCron.schedule('* 8-22 * * *', checkNotifications);
+
+// Очистка старых задач каждые 6 часов
+nodeCron.schedule('0 */6 * * *', cleanupOldTasks); // Каждые 6 часов
 
 // Запуск
 const PORT = process.env.PORT || 3000;
