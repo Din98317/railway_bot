@@ -320,7 +320,7 @@ bot.onText(/\/help/, (msg) => {
     });
 });
 
-// ========== НОВЫЕ ЭНДПОИНТЫ ДЛЯ MINI APP ==========
+// ========== ЭНДПОИНТЫ ДЛЯ MINI APP ==========
 
 // Эндпоинт для создания семьи из Mini App
 app.post('/createfamily', async (req, res) => {
@@ -448,7 +448,7 @@ app.post('/getfamily', async (req, res) => {
     }
 });
 
-// Обновленный эндпоинт для получения задач (добавляем информацию о семье)
+// Эндпоинт для получения задач
 app.post('/gettasks', async (req, res) => {
     try {
         const { userId } = req.body;
@@ -476,7 +476,7 @@ app.post('/gettasks', async (req, res) => {
     }
 });
 
-// Обновленный эндпоинт для добавления задач (добавляем поддержку семейных задач)
+// Эндпоинт для добавления задач
 app.post('/addtask', async (req, res) => {
     try {
         const taskData = req.body;
@@ -550,32 +550,228 @@ app.post('/addtask', async (req, res) => {
     }
 });
 
+// Эндпоинт для обновления задачи
+app.put('/updatetask', async (req, res) => {
+    try {
+        const { taskId, userId, title, datetime } = req.body;
+        
+        console.log('✏️ Запрос на обновление задачи:', { taskId, userId, title, datetime });
+
+        if (!taskId || !userId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'taskId и userId обязательны' 
+            });
+        }
+
+        const tasks = await getTasks();
+        const taskIndex = tasks.findIndex(task => task.id === taskId);
+        
+        if (taskIndex === -1) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Задача не найдена' 
+            });
+        }
+
+        // Проверяем права на редактирование
+        const task = tasks[taskIndex];
+        const familyId = getUserFamily(userId);
+        
+        // Можно редактировать если:
+        // 1. Это наша личная задача
+        // 2. Это семейная задача и мы в той же семье
+        const canEdit = task.userId == userId || 
+                       (task.familyId && task.familyId === familyId);
+        
+        if (!canEdit) {
+            return res.status(403).json({ 
+                success: false, 
+                error: 'Нет прав для редактирования этой задачи' 
+            });
+        }
+
+        // Обновляем поля
+        if (title) tasks[taskIndex].title = title;
+        if (datetime) {
+            tasks[taskIndex].datetime = datetime;
+            tasks[taskIndex].notified = false; // Сбрасываем статус уведомления при изменении времени
+        }
+
+        const saved = await saveTasks(tasks);
+
+        if (!saved) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Ошибка сохранения изменений' 
+            });
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Задача обновлена',
+            task: tasks[taskIndex]
+        });
+
+    } catch (error) {
+        console.error('❌ Ошибка обновления задачи:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Ошибка при обновлении задачи' 
+        });
+    }
+});
+
+// Эндпоинт для удаления задачи
+app.delete('/deletetask', async (req, res) => {
+    try {
+        const { taskId, userId } = req.body;
+        
+        console.log('🗑️ Запрос на удаление задачи:', { taskId, userId });
+
+        if (!taskId || !userId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'taskId и userId обязательны' 
+            });
+        }
+
+        const tasks = await getTasks();
+        const taskIndex = tasks.findIndex(task => task.id === taskId);
+        
+        if (taskIndex === -1) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Задача не найдена' 
+            });
+        }
+
+        // Проверяем права на удаление
+        const task = tasks[taskIndex];
+        const familyId = getUserFamily(userId);
+        
+        // Можно удалять если:
+        // 1. Это наша личная задача
+        // 2. Это семейная задача и мы в той же семье
+        const canDelete = task.userId == userId || 
+                         (task.familyId && task.familyId === familyId);
+        
+        if (!canDelete) {
+            return res.status(403).json({ 
+                success: false, 
+                error: 'Нет прав для удаления этой задачи' 
+            });
+        }
+
+        // Сохраняем информацию об удаляемой задаче для логов
+        const deletedTask = tasks[taskIndex];
+        
+        // Удаляем задачу
+        tasks.splice(taskIndex, 1);
+
+        const saved = await saveTasks(tasks);
+
+        if (!saved) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Ошибка сохранения изменений' 
+            });
+        }
+
+        console.log(`✅ Задача удалена: "${deletedTask.title}" пользователем ${userId}`);
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Задача удалена'
+        });
+
+    } catch (error) {
+        console.error('❌ Ошибка удаления задачи:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Ошибка при удалении задачи' 
+        });
+    }
+});
+
 // Health check
 app.get('/', (req, res) => {
     res.json({ 
         status: 'OK', 
         message: 'Family Task Manager Bot is running',
-        familiesCount: Object.keys(families).length
+        familiesCount: Object.keys(families).length,
+        timestamp: new Date().toISOString()
     });
 });
 
-// Функция уведомлений
+// Функция проверки и отправки уведомлений
 async function checkNotifications() {
     try {
         const tasks = await getTasks();
+        const now = new Date();
+        
         console.log(`🔍 Проверка уведомлений... Задач: ${tasks.length}`);
-        // Логика уведомлений здесь
+
+        let notificationsSent = 0;
+
+        for (const task of tasks) {
+            if (task.notified) continue;
+
+            const taskDate = new Date(task.datetime);
+            const timeDiff = taskDate.getTime() - now.getTime();
+            const hoursDiff = timeDiff / (1000 * 60 * 60);
+
+            // Отправляем уведомление за 5 часов до начала
+            if (hoursDiff <= 5 && hoursDiff > 0) {
+                const message = `🔔 Напоминание!\nЧерез ${Math.round(hoursDiff)} часа начнется:\n"${task.title}"`;
+                
+                // Для личных задач - только создателю
+                if (!task.isFamilyTask) {
+                    try {
+                        await bot.sendMessage(task.userId, message);
+                        console.log(`✅ Уведомление отправлено пользователю ${task.userId} для задачи "${task.title}"`);
+                        task.notified = true;
+                        notificationsSent++;
+                    } catch (error) {
+                        console.error(`❌ Не удалось отправить уведомление пользователю ${task.userId}:`, error.message);
+                    }
+                } else {
+                    // Для семейных задач - всем участникам семьи
+                    const family = families[task.familyId];
+                    if (family) {
+                        for (const memberId of family.members) {
+                            try {
+                                await bot.sendMessage(memberId, message);
+                                console.log(`✅ Семейное уведомление отправлено пользователю ${memberId} для задачи "${task.title}"`);
+                            } catch (error) {
+                                console.error(`❌ Не удалось отправить уведомление участнику ${memberId}:`, error.message);
+                            }
+                        }
+                        task.notified = true;
+                        notificationsSent++;
+                    }
+                }
+            }
+        }
+
+        if (notificationsSent > 0) {
+            await saveTasks(tasks);
+            console.log(`📨 Отправлено уведомлений: ${notificationsSent}`);
+        }
+
     } catch (error) {
-        console.error('❌ Ошибка проверки:', error);
+        console.error('❌ Ошибка проверки уведомлений:', error);
     }
 }
 
+// Проверяем задачи каждую минуту
 nodeCron.schedule('* * * * *', checkNotifications);
 
 // Запуск
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
+    console.log(`📱 Mini App URL: ${MINI_APP_URL}`);
     
     await loadData();
     
@@ -591,3 +787,9 @@ app.listen(PORT, '0.0.0.0', async () => {
 // Обработка ошибок
 bot.on('error', (error) => console.error('❌ Ошибка бота:', error));
 bot.on('polling_error', (error) => console.error('❌ Ошибка polling:', error));
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('🔄 Получен SIGTERM, graceful shutdown...');
+    process.exit(0);
+});
