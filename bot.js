@@ -52,11 +52,21 @@ async function getTasks() {
 
 async function saveTasks(tasks) {
     try {
-        await axios.put(JSONBIN_PUT_URL, { tasks, families }, { headers });
-        console.log('✅ Данные сохранены');
+        const dataToSave = { tasks, families };
+        await axios.put(JSONBIN_PUT_URL, dataToSave, { headers });
+        console.log('✅ Данные успешно сохранены в JSONBin');
+        
+        // Логируем статистику
+        const familyTasks = tasks.filter(task => task.isFamilyTask).length;
+        const personalTasks = tasks.filter(task => !task.isFamilyTask).length;
+        console.log(`📊 Статистика: ${personalTasks} личных, ${familyTasks} семейных задач, ${Object.keys(families).length} семей`);
+        
         return true;
     } catch (error) {
-        console.error('❌ Ошибка сохранения:', error.message);
+        console.error('❌ Ошибка сохранения данных:', error.message);
+        if (error.response) {
+            console.error('📡 Ответ сервера:', error.response.data);
+        }
         return false;
     }
 }
@@ -130,6 +140,112 @@ async function addToFamily(familyId, userId) {
     } catch (error) {
         console.error('❌ Ошибка добавления в семью:', error);
         throw error;
+    }
+}
+
+// Вспомогательная функция для правильного склонения
+function getTimeText(value, unit) {
+    if (unit === 'hours') {
+        if (value === 1) return 'час';
+        if (value >= 2 && value <= 4) return 'часа';
+        return 'часов';
+    } else if (unit === 'minutes') {
+        if (value === 1) return 'минуту';
+        if (value >= 2 && value <= 4) return 'минуты';
+        return 'минут';
+    }
+    return unit;
+}
+
+// Функция отправки уведомления
+async function sendNotification(task, timeValue, timeText) {
+    const taskDate = new Date(task.datetime);
+    const message = `🔔 Напоминание!\nЧерез ${timeText} начнется:\n"${task.title}"\n📅 ${taskDate.toLocaleString('ru-RU')}`;
+    
+    let sentSuccessfully = true;
+
+    try {
+        // Для личных задач - только создателю
+        if (!task.isFamilyTask) {
+            await bot.sendMessage(task.userId, message);
+            console.log(`✅ Уведомление за ${timeText} отправлено пользователю ${task.userId} для задачи "${task.title}"`);
+        } else {
+            // Для семейных задач - всем участникам семьи
+            const family = families[task.familyId];
+            if (family) {
+                for (const memberId of family.members) {
+                    try {
+                        await bot.sendMessage(memberId, message);
+                        console.log(`✅ Семейное уведомление за ${timeText} отправлено пользователю ${memberId} для задачи "${task.title}"`);
+                    } catch (error) {
+                        console.error(`❌ Не удалось отправить уведомление участнику ${memberId}:`, error.message);
+                        sentSuccessfully = false;
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`❌ Ошибка отправки уведомления за ${timeText}:`, error.message);
+        sentSuccessfully = false;
+    }
+
+    return sentSuccessfully;
+}
+
+// Функция проверки и отправки уведомлений
+async function checkNotifications() {
+    try {
+        const tasks = await getTasks();
+        const now = new Date();
+        
+        console.log(`🔍 Проверка уведомлений... Задач: ${tasks.length}`);
+        console.log(`⏰ Текущее время: ${now.toLocaleString('ru-RU')}`);
+
+        let notificationsSent = 0;
+        let updated = false;
+
+        for (const task of tasks) {
+            const taskDate = new Date(task.datetime);
+            const timeDiff = taskDate.getTime() - now.getTime();
+            const hoursDiff = timeDiff / (1000 * 60 * 60);
+
+            console.log(`📊 Задача "${task.title}": через ${hoursDiff.toFixed(2)} часов, уведомлено: ${task.notified}`);
+
+            // Уведомление за 5 часов (если еще не уведомляли)
+            if (!task.notified && hoursDiff <= 5 && hoursDiff > 4.98) {
+                const sent = await sendNotification(task, 5, '5 часов');
+                if (sent) {
+                    task.notified = true;
+                    updated = true;
+                    notificationsSent++;
+                }
+            }
+            // Дополнительное уведомление за 1 час
+            else if (hoursDiff <= 1 && hoursDiff > 0.98) {
+                await sendNotification(task, 1, '1 час');
+                notificationsSent++;
+            }
+            // Уведомление за 30 минут
+            else if (hoursDiff <= 0.5 && hoursDiff > 0.48) {
+                await sendNotification(task, 30, '30 минут');
+                notificationsSent++;
+            }
+            // Уведомление за 15 минут
+            else if (hoursDiff <= 0.25 && hoursDiff > 0.23) {
+                await sendNotification(task, 15, '15 минут');
+                notificationsSent++;
+            }
+        }
+
+        if (updated) {
+            await saveTasks(tasks);
+            console.log(`📨 Отправлено уведомлений: ${notificationsSent}, данные сохранены`);
+        } else if (notificationsSent > 0) {
+            console.log(`📨 Отправлено уведомлений: ${notificationsSent}`);
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка проверки уведомлений:', error);
     }
 }
 
@@ -295,6 +411,20 @@ bot.onText(/\/mytasks/, async (msg) => {
     }
 });
 
+// Команда для тестирования уведомлений
+bot.onText(/\/testnotifications/, async (msg) => {
+    const userId = msg.chat.id;
+    
+    try {
+        await bot.sendMessage(userId, '🔍 Запускаю проверку уведомлений...');
+        await checkNotifications();
+        await bot.sendMessage(userId, '✅ Проверка уведомлений завершена');
+    } catch (error) {
+        console.error('❌ Ошибка тестирования уведомлений:', error);
+        await bot.sendMessage(userId, '❌ Ошибка при проверке уведомлений');
+    }
+});
+
 // Команда /help
 bot.onText(/\/help/, (msg) => {
     const userId = msg.chat.id;
@@ -306,6 +436,7 @@ bot.onText(/\/help/, (msg) => {
 /createfamily [название] - Создать семью
 /invite [ID] - Пригласить в семью
 /myfamily - Информация о семье
+/testnotifications - Тест уведомлений
 /help - Справка
 
 📱 Основной функционал в Mini App:
@@ -704,68 +835,21 @@ app.get('/', (req, res) => {
     });
 });
 
-// Функция проверки и отправки уведомлений
-async function checkNotifications() {
-    try {
-        const tasks = await getTasks();
-        const now = new Date();
-        
-        console.log(`🔍 Проверка уведомлений... Задач: ${tasks.length}`);
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        service: 'Family Task Manager Bot',
+        time: new Date().toLocaleString('ru-RU'),
+        uptime: process.uptime(),
+        familiesCount: Object.keys(families).length
+    });
+});
 
-        let notificationsSent = 0;
+// Проверяем задачи каждые 5 минут для большей точности
+nodeCron.schedule('*/5 * * * *', checkNotifications);
 
-        for (const task of tasks) {
-            if (task.notified) continue;
-
-            const taskDate = new Date(task.datetime);
-            const timeDiff = taskDate.getTime() - now.getTime();
-            const hoursDiff = timeDiff / (1000 * 60 * 60);
-
-            // Отправляем уведомление за 5 часов до начала
-            if (hoursDiff <= 5 && hoursDiff > 0) {
-                const message = `🔔 Напоминание!\nЧерез ${Math.round(hoursDiff)} часа начнется:\n"${task.title}"`;
-                
-                // Для личных задач - только создателю
-                if (!task.isFamilyTask) {
-                    try {
-                        await bot.sendMessage(task.userId, message);
-                        console.log(`✅ Уведомление отправлено пользователю ${task.userId} для задачи "${task.title}"`);
-                        task.notified = true;
-                        notificationsSent++;
-                    } catch (error) {
-                        console.error(`❌ Не удалось отправить уведомление пользователю ${task.userId}:`, error.message);
-                    }
-                } else {
-                    // Для семейных задач - всем участникам семьи
-                    const family = families[task.familyId];
-                    if (family) {
-                        for (const memberId of family.members) {
-                            try {
-                                await bot.sendMessage(memberId, message);
-                                console.log(`✅ Семейное уведомление отправлено пользователю ${memberId} для задачи "${task.title}"`);
-                            } catch (error) {
-                                console.error(`❌ Не удалось отправить уведомление участнику ${memberId}:`, error.message);
-                            }
-                        }
-                        task.notified = true;
-                        notificationsSent++;
-                    }
-                }
-            }
-        }
-
-        if (notificationsSent > 0) {
-            await saveTasks(tasks);
-            console.log(`📨 Отправлено уведомлений: ${notificationsSent}`);
-        }
-
-    } catch (error) {
-        console.error('❌ Ошибка проверки уведомлений:', error);
-    }
-}
-
-// Проверяем задачи каждую минуту
-nodeCron.schedule('* * * * *', checkNotifications);
+// Дополнительно: проверка каждую минуту в пиковые часы (с 8 утра до 10 вечера)
+nodeCron.schedule('* 8-22 * * *', checkNotifications);
 
 // Запуск
 const PORT = process.env.PORT || 3000;
@@ -779,6 +863,11 @@ app.listen(PORT, '0.0.0.0', async () => {
     bot.startPolling().then(() => {
         console.log('✅ Бот запущен в режиме polling');
         console.log('✅ Семейный задачник готов!');
+        console.log('⏰ Система уведомлений активна:');
+        console.log('   - Уведомления за 5 часов');
+        console.log('   - Уведомления за 1 час');
+        console.log('   - Уведомления за 30 минут');
+        console.log('   - Уведомления за 15 минут');
     }).catch(error => {
         console.error('❌ Ошибка запуска бота:', error);
     });
