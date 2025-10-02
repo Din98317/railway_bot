@@ -233,7 +233,7 @@ async function checkNotifications() {
             const hoursDiff = timeDiff / (1000 * 60 * 60);
 
             // Если до задачи осталось 4 часа или меньше
-            if (hoursDiff <= 4 && hoursDiff > 0) {
+            if (hoursDiff <= 7 && hoursDiff > 0) {
                 const message = `🔔 Напоминание!\nЧерез ${Math.round(hoursDiff)} часа начнется:\n"${task.title}"`;
                 
                 try {
