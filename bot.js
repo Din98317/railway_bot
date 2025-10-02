@@ -6,12 +6,13 @@ const express = require('express');
 const app = express();
 
 // Получаем переменные окружения из Railway
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8438607431:AAHQZWYuENj3af5THn8TgFWofTx0WyT8_gU';
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const JSONBIN_ID = process.env.JSONBIN_ID;
 const JSONBIN_ACCESS_KEY = process.env.JSONBIN_ACCESS_KEY;
-const MINI_APP_URL = process.env.MINI_APP_URL || 'https://new-tasks-tg.vercel.app';
+const MINI_APP_URL = process.env.MINI_APP_URL;
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+// Используем webhook вместо polling
+const bot = new TelegramBot(TOKEN);
 
 // Middleware для обработки JSON
 app.use(express.json());
@@ -46,14 +47,13 @@ async function saveTasks(tasks) {
     }
 }
 
-// Новый endpoint для добавления задач из Mini App
+// Endpoint для добавления задач из Mini App
 app.post('/addtask', async (req, res) => {
     try {
         const taskData = req.body;
         
         console.log('📨 Получена новая задача:', taskData);
 
-        // Добавляем ID задачи
         const newTask = {
             id: Date.now().toString(),
             userId: taskData.userId,
@@ -90,7 +90,7 @@ app.post('/gettasks', async (req, res) => {
     }
 });
 
-// Команда для установки web app
+// Команды бота
 bot.onText(/\/start/, (msg) => {
     const userId = msg.chat.id;
     
@@ -101,56 +101,11 @@ bot.onText(/\/start/, (msg) => {
         }]]
     };
 
-    const welcomeMessage = `👋 Добро пожаловать в менеджер семейных задач!
-
-📝 Создавайте задачи и получайте напоминания за 4 часа до начала.
-
-Нажмите кнопку ниже чтобы открыть приложение:`;
+    const welcomeMessage = `👋 Добро пожаловать в менеджер семейных задач!\n\n📝 Создавайте задачи и получайте напоминания за 4 часа до начала.\n\nНажмите кнопку ниже чтобы открыть приложение:`;
 
     bot.sendMessage(userId, welcomeMessage, {
         reply_markup: keyboard
     });
-});
-
-// Команда для просмотра задач через бота
-bot.onText(/\/mytasks/, async (msg) => {
-    const userId = msg.chat.id;
-    try {
-        const tasks = await getTasks();
-        const userTasks = tasks.filter(task => task.userId == userId);
-        
-        if (userTasks.length === 0) {
-            await bot.sendMessage(userId, '📝 У вас пока нет задач');
-            return;
-        }
-
-        let message = '📋 Ваши задачи:\n\n';
-        userTasks.forEach((task, index) => {
-            const date = new Date(task.datetime).toLocaleString('ru-RU');
-            const status = task.notified ? '🔔' : '⏰';
-            message += `${index + 1}. ${task.title}\n   📅 ${date} ${status}\n\n`;
-        });
-
-        await bot.sendMessage(userId, message);
-    } catch (error) {
-        console.error('❌ Ошибка получения задач:', error);
-        await bot.sendMessage(userId, '❌ Ошибка при загрузке задач');
-    }
-});
-
-// Команда помощи
-bot.onText(/\/help/, (msg) => {
-    const userId = msg.chat.id;
-    
-    const helpMessage = `📖 Доступные команды:
-
-/start - Запустить бота и открыть приложение
-/mytasks - Показать все ваши задачи
-/help - Показать эту справку
-
-📱 Основной функционал доступен через Mini App (кнопка в /start)`;
-
-    bot.sendMessage(userId, helpMessage);
 });
 
 // Функция проверки и отправки уведомлений
@@ -168,23 +123,19 @@ async function checkNotifications() {
             const timeDiff = taskDate.getTime() - now.getTime();
             const hoursDiff = timeDiff / (1000 * 60 * 60);
 
-            // Если до задачи осталось 4 часа или меньше
             if (hoursDiff <= 4 && hoursDiff > 0) {
                 const message = `🔔 Напоминание!\nЧерез ${Math.round(hoursDiff)} часа начнется:\n"${task.title}"`;
                 
                 try {
                     await bot.sendMessage(task.userId, message);
                     console.log(`✅ Уведомление отправлено пользователю ${task.userId} для задачи "${task.title}"`);
-                    
-                    // Помечаем задачу как уведомленную
                     task.notified = true;
                 } catch (error) {
-                    console.error(`❌ Не удалось отправить уведомление пользователю ${task.userId}:`, error.message);
+                    console.error(`❌ Не удалось отправить уведомление:`, error.message);
                 }
             }
         }
 
-        // Сохраняем обновленные задачи
         await saveTasks(tasks);
     } catch (error) {
         console.error('❌ Ошибка проверки уведомлений:', error);
@@ -194,21 +145,10 @@ async function checkNotifications() {
 // Проверяем задачи каждую минуту
 nodeCron.schedule('* * * * *', checkNotifications);
 
-// Обработка ошибок бота
-bot.on('error', (error) => {
-    console.error('❌ Ошибка бота:', error);
-});
-
-bot.on('polling_error', (error) => {
-    console.error('❌ Ошибка polling:', error);
-});
-
-// Запускаем сервер
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Сервер запущен на порту ${PORT}`);
-    console.log(`📱 Mini App URL: ${MINI_APP_URL}`);
-    console.log('✅ Бот готов к работе!');
+// Webhook для Telegram
+app.post('/webhook', (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
 });
 
 // Health check endpoint
@@ -220,4 +160,28 @@ app.get('/', (req, res) => {
     });
 });
 
-console.log('🔧 Инициализация бота...');
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        service: 'Task Manager Bot',
+        time: new Date().toLocaleString('ru-RU')
+    });
+});
+
+// Запускаем сервер
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Сервер запущен на порту ${PORT}`);
+    console.log(`📱 Mini App URL: ${MINI_APP_URL}`);
+    console.log('✅ Бот готов к работе!');
+});
+
+// Обработка ошибок
+bot.on('error', (error) => {
+    console.error('❌ Ошибка бота:', error);
+});
+
+process.on('SIGTERM', () => {
+    console.log('🔄 Получен SIGTERM, graceful shutdown...');
+    process.exit(0);
+});
