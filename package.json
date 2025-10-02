@@ -1,0 +1,17 @@
+{
+  "name": "telegram-tasks-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for task management with mini app",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "axios": "^1.6.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
