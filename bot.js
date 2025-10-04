@@ -160,16 +160,18 @@ function getTimeText(value, unit) {
 // ========== ИСПРАВЛЕННЫЕ ФУНКЦИИ УВЕДОМЛЕНИЙ ==========
 
 // Исправленная функция отправки уведомления
+// Исправленная функция отправки уведомления с учетом временных зон
 async function sendNotification(task, timeValue, timeText) {
     const taskDate = new Date(task.datetime);
     const now = new Date();
     
-    // Добавляем логирование для отладки
+    // Добавляем логирование для отладки временных зон
     console.log(`📊 Debug времени:`, {
-        taskTime: taskDate.toISOString(),
-        currentTime: now.toISOString(),
-        taskLocal: taskDate.toLocaleString('ru-RU'),
-        currentLocal: now.toLocaleString('ru-RU')
+        taskTimeUTC: taskDate.toISOString(),
+        currentTimeUTC: now.toISOString(),
+        taskTimeLocal: taskDate.toLocaleString('ru-RU'),
+        currentTimeLocal: now.toLocaleString('ru-RU'),
+        timezoneOffset: now.getTimezoneOffset() / 60
     });
     
     const timeDiff = taskDate.getTime() - now.getTime();
@@ -230,14 +232,14 @@ async function sendNotification(task, timeValue, timeText) {
     return sentSuccessfully;
 }
 
-// Исправленная функция проверки и отправки уведомлений
+// Исправленная функция проверки уведомлений с правильными временными интервалами
 async function checkNotifications() {
     try {
         const tasks = await getTasks();
         const now = new Date();
         
         console.log(`🔍 Проверка уведомлений... Задач: ${tasks.length}`);
-        console.log(`⏰ Текущее время: ${now.toLocaleString('ru-RU')} (${now.toISOString()})`);
+        console.log(`⏰ Текущее время: ${now.toLocaleString('ru-RU')} (UTC: ${now.toISOString()})`);
 
         let notificationsSent = 0;
         let updated = false;
@@ -250,16 +252,20 @@ async function checkNotifications() {
 
             console.log(`📊 Задача "${task.title}":`, {
                 scheduledTime: taskDate.toLocaleString('ru-RU'),
-                timeUntil: `${hoursDiff.toFixed(2)} часов`,
+                scheduledUTC: taskDate.toISOString(),
+                timeUntil: `${hoursDiff.toFixed(2)} часов (${minutesDiff.toFixed(0)} минут)`,
                 notified: task.notified
             });
 
             // Пропускаем прошедшие задачи
-            if (timeDiff <= 0) continue;
+            if (timeDiff <= 0) {
+                console.log(`⏭️ Задача "${task.title}" уже прошла, пропускаем`);
+                continue;
+            }
 
             // Уведомление за 5 часов (300 минут) - только один раз
-            if (!task.notified && minutesDiff <= 300 && minutesDiff > 295) {
-                console.log(`🎯 Отправляем уведомление за 5 часов для "${task.title}"`);
+            if (!task.notified && minutesDiff <= 300 && minutesDiff >= 299) {
+                console.log(`🎯 Отправляем уведомление за 5 часов для "${task.title}" (${minutesDiff.toFixed(0)} минут до начала)`);
                 const sent = await sendNotification(task, 5, '5 часов');
                 if (sent) {
                     task.notified = true;
@@ -267,27 +273,33 @@ async function checkNotifications() {
                     notificationsSent++;
                 }
             }
+            // Уведомление за 3 часа (180 минут)
+            else if (minutesDiff <= 180 && minutesDiff >= 179) {
+                console.log(`🎯 Отправляем уведомление за 3 часа для "${task.title}" (${minutesDiff.toFixed(0)} минут до начала)`);
+                await sendNotification(task, 3, '3 часа');
+                notificationsSent++;
+            }
             // Уведомление за 1 час (60 минут)
-            else if (minutesDiff <= 60 && minutesDiff > 58) {
-                console.log(`🎯 Отправляем уведомление за 1 час для "${task.title}"`);
+            else if (minutesDiff <= 60 && minutesDiff >= 59) {
+                console.log(`🎯 Отправляем уведомление за 1 час для "${task.title}" (${minutesDiff.toFixed(0)} минут до начала)`);
                 await sendNotification(task, 1, '1 час');
                 notificationsSent++;
             }
             // Уведомление за 30 минут
-            else if (minutesDiff <= 30 && minutesDiff > 28) {
-                console.log(`🎯 Отправляем уведомление за 30 минут для "${task.title}"`);
+            else if (minutesDiff <= 30 && minutesDiff >= 29) {
+                console.log(`🎯 Отправляем уведомление за 30 минут для "${task.title}" (${minutesDiff.toFixed(0)} минут до начала)`);
                 await sendNotification(task, 30, '30 минут');
                 notificationsSent++;
             }
             // Уведомление за 15 минут
-            else if (minutesDiff <= 15 && minutesDiff > 13) {
-                console.log(`🎯 Отправляем уведомление за 15 минут для "${task.title}"`);
+            else if (minutesDiff <= 15 && minutesDiff >= 14) {
+                console.log(`🎯 Отправляем уведомление за 15 минут для "${task.title}" (${minutesDiff.toFixed(0)} минут до начала)`);
                 await sendNotification(task, 15, '15 минут');
                 notificationsSent++;
             }
             // Уведомление за 5 минут
-            else if (minutesDiff <= 5 && minutesDiff > 3) {
-                console.log(`🎯 Отправляем уведомление за 5 минут для "${task.title}"`);
+            else if (minutesDiff <= 5 && minutesDiff >= 4) {
+                console.log(`🎯 Отправляем уведомление за 5 минут для "${task.title}" (${minutesDiff.toFixed(0)} минут до начала)`);
                 await sendNotification(task, 5, '5 минут');
                 notificationsSent++;
             }
@@ -517,6 +529,24 @@ bot.onText(/\/testnotifications/, async (msg) => {
         console.error('❌ Ошибка тестирования уведомлений:', error);
         await bot.sendMessage(userId, '❌ Ошибка при проверке уведомлений');
     }
+});
+
+// Команда для отладки временных зон
+bot.onText(/\/timecheck/, async (msg) => {
+    const userId = msg.chat.id;
+    
+    const now = new Date();
+    const message = `🕐 Информация о времени:
+    
+📅 Локальное время сервера: ${now.toLocaleString('ru-RU')}
+🌐 UTC время сервера: ${now.toISOString()}
+⏰ Смещение часового пояса сервера: ${-now.getTimezoneOffset() / 60} часов
+📱 Часовой пояс сервера: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
+
+💡 Эта команда показывает время на СЕРВЕРЕ.
+Для проверки вашего локального времени используйте команду /mytasks и посмотрите время создания задач.`;
+
+    await bot.sendMessage(userId, message);
 });
 
 // Команда /help
