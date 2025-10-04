@@ -157,18 +157,37 @@ function getTimeText(value, unit) {
     return unit;
 }
 
-// Функция отправки уведомления
+// ========== ИСПРАВЛЕННЫЕ ФУНКЦИИ УВЕДОМЛЕНИЙ ==========
+
+// Исправленная функция отправки уведомления
 async function sendNotification(task, timeValue, timeText) {
     const taskDate = new Date(task.datetime);
-    const message = `🔔 Напоминание!\nЧерез ${timeText} начнется:\n"${task.title}"\n📅 ${taskDate.toLocaleString('ru-RU')}`;
+    const now = new Date();
+    const timeDiff = taskDate.getTime() - now.getTime();
+    const actualHours = Math.floor(timeDiff / (1000 * 60 * 60));
+    const actualMinutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
     
+    let actualTimeText;
+    if (actualHours > 0) {
+        actualTimeText = `${actualHours} ${getTimeText(actualHours, 'hours')}`;
+        if (actualMinutes > 0) {
+            actualTimeText += ` ${actualMinutes} ${getTimeText(actualMinutes, 'minutes')}`;
+        }
+    } else {
+        actualTimeText = `${actualMinutes} ${getTimeText(actualMinutes, 'minutes')}`;
+    }
+    
+    const message = `🔔 Напоминание!\nЧерез ${actualTimeText} начнется:\n"${task.title}"\n📅 ${taskDate.toLocaleString('ru-RU')}`;
+    
+    console.log(`✉️ Отправка уведомления: ${message}`);
+
     let sentSuccessfully = true;
 
     try {
         // Для личных задач - только создателю
         if (!task.isFamilyTask) {
             await bot.sendMessage(task.userId, message);
-            console.log(`✅ Уведомление за ${timeText} отправлено пользователю ${task.userId} для задачи "${task.title}"`);
+            console.log(`✅ Уведомление отправлено пользователю ${task.userId}`);
         } else {
             // Для семейных задач - всем участникам семьи
             const family = families[task.familyId];
@@ -176,7 +195,7 @@ async function sendNotification(task, timeValue, timeText) {
                 for (const memberId of family.members) {
                     try {
                         await bot.sendMessage(memberId, message);
-                        console.log(`✅ Семейное уведомление за ${timeText} отправлено пользователю ${memberId} для задачи "${task.title}"`);
+                        console.log(`✅ Семейное уведомление отправлено пользователю ${memberId}`);
                     } catch (error) {
                         console.error(`❌ Не удалось отправить уведомление участнику ${memberId}:`, error.message);
                         sentSuccessfully = false;
@@ -185,14 +204,14 @@ async function sendNotification(task, timeValue, timeText) {
             }
         }
     } catch (error) {
-        console.error(`❌ Ошибка отправки уведомления за ${timeText}:`, error.message);
+        console.error(`❌ Ошибка отправки уведомления:`, error.message);
         sentSuccessfully = false;
     }
 
     return sentSuccessfully;
 }
 
-// Функция проверки и отправки уведомлений
+// Исправленная функция проверки и отправки уведомлений
 async function checkNotifications() {
     try {
         const tasks = await getTasks();
@@ -208,11 +227,13 @@ async function checkNotifications() {
             const taskDate = new Date(task.datetime);
             const timeDiff = taskDate.getTime() - now.getTime();
             const hoursDiff = timeDiff / (1000 * 60 * 60);
+            const minutesDiff = timeDiff / (1000 * 60);
 
-            console.log(`📊 Задача "${task.title}": через ${hoursDiff.toFixed(2)} часов, уведомлено: ${task.notified}`);
+            console.log(`📊 Задача "${task.title}": ${taskDate.toLocaleString('ru-RU')}, через ${hoursDiff.toFixed(2)} часов, уведомлено: ${task.notified}`);
 
             // Уведомление за 5 часов (если еще не уведомляли)
-            if (!task.notified && hoursDiff <= 5 && hoursDiff > 4.98) {
+            if (!task.notified && hoursDiff <= 5 && hoursDiff >= 4.98) {
+                console.log(`🎯 Отправляем уведомление за 5 часов для "${task.title}"`);
                 const sent = await sendNotification(task, 5, '5 часов');
                 if (sent) {
                     task.notified = true;
@@ -220,19 +241,28 @@ async function checkNotifications() {
                     notificationsSent++;
                 }
             }
-            // Дополнительное уведомление за 1 час
-            else if (hoursDiff <= 1 && hoursDiff > 0.98) {
+            // Уведомление за 1 час
+            else if (hoursDiff <= 1 && hoursDiff >= 0.98) {
+                console.log(`🎯 Отправляем уведомление за 1 час для "${task.title}"`);
                 await sendNotification(task, 1, '1 час');
                 notificationsSent++;
             }
             // Уведомление за 30 минут
-            else if (hoursDiff <= 0.5 && hoursDiff > 0.48) {
+            else if (minutesDiff <= 30 && minutesDiff >= 28) {
+                console.log(`🎯 Отправляем уведомление за 30 минут для "${task.title}"`);
                 await sendNotification(task, 30, '30 минут');
                 notificationsSent++;
             }
             // Уведомление за 15 минут
-            else if (hoursDiff <= 0.25 && hoursDiff > 0.23) {
+            else if (minutesDiff <= 15 && minutesDiff >= 13) {
+                console.log(`🎯 Отправляем уведомление за 15 минут для "${task.title}"`);
                 await sendNotification(task, 15, '15 минут');
+                notificationsSent++;
+            }
+            // Уведомление за 5 минут
+            else if (minutesDiff <= 5 && minutesDiff >= 3) {
+                console.log(`🎯 Отправляем уведомление за 5 минут для "${task.title}"`);
+                await sendNotification(task, 5, '5 минут');
                 notificationsSent++;
             }
         }
@@ -242,6 +272,8 @@ async function checkNotifications() {
             console.log(`📨 Отправлено уведомлений: ${notificationsSent}, данные сохранены`);
         } else if (notificationsSent > 0) {
             console.log(`📨 Отправлено уведомлений: ${notificationsSent}`);
+        } else {
+            console.log('📭 Уведомлений для отправки не найдено');
         }
 
     } catch (error) {
@@ -881,11 +913,8 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Проверяем задачи каждые 5 минут для большей точности
-nodeCron.schedule('*/5 * * * *', checkNotifications);
-
-// Дополнительно: проверка каждую минуту в пиковые часы (с 8 утра до 10 вечера)
-nodeCron.schedule('* 8-22 * * *', checkNotifications);
+// Проверяем задачи каждую минуту для максимальной точности
+nodeCron.schedule('* * * * *', checkNotifications);
 
 // Очистка старых задач каждые 6 часов
 nodeCron.schedule('0 */6 * * *', cleanupOldTasks); // Каждые 6 часов
@@ -907,6 +936,8 @@ app.listen(PORT, '0.0.0.0', async () => {
         console.log('   - Уведомления за 1 час');
         console.log('   - Уведомления за 30 минут');
         console.log('   - Уведомления за 15 минут');
+        console.log('   - Уведомления за 5 минут');
+        console.log('   - Проверка каждую минуту');
     }).catch(error => {
         console.error('❌ Ошибка запуска бота:', error);
     });
