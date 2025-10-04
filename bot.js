@@ -163,9 +163,26 @@ function getTimeText(value, unit) {
 async function sendNotification(task, timeValue, timeText) {
     const taskDate = new Date(task.datetime);
     const now = new Date();
+    
+    // Добавляем логирование для отладки
+    console.log(`📊 Debug времени:`, {
+        taskTime: taskDate.toISOString(),
+        currentTime: now.toISOString(),
+        taskLocal: taskDate.toLocaleString('ru-RU'),
+        currentLocal: now.toLocaleString('ru-RU')
+    });
+    
     const timeDiff = taskDate.getTime() - now.getTime();
-    const actualHours = Math.floor(timeDiff / (1000 * 60 * 60));
-    const actualMinutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    // Если время уже прошло, не отправляем уведомление
+    if (timeDiff <= 0) {
+        console.log(`⚠️ Время задачи уже прошло, пропускаем уведомление`);
+        return false;
+    }
+    
+    const totalMinutes = Math.floor(timeDiff / (1000 * 60));
+    const actualHours = Math.floor(totalMinutes / 60);
+    const actualMinutes = totalMinutes % 60;
     
     let actualTimeText;
     if (actualHours > 0) {
@@ -173,8 +190,10 @@ async function sendNotification(task, timeValue, timeText) {
         if (actualMinutes > 0) {
             actualTimeText += ` ${actualMinutes} ${getTimeText(actualMinutes, 'minutes')}`;
         }
-    } else {
+    } else if (actualMinutes > 0) {
         actualTimeText = `${actualMinutes} ${getTimeText(actualMinutes, 'minutes')}`;
+    } else {
+        actualTimeText = "менее минуты";
     }
     
     const message = `🔔 Напоминание!\nЧерез ${actualTimeText} начнется:\n"${task.title}"\n📅 ${taskDate.toLocaleString('ru-RU')}`;
@@ -218,7 +237,7 @@ async function checkNotifications() {
         const now = new Date();
         
         console.log(`🔍 Проверка уведомлений... Задач: ${tasks.length}`);
-        console.log(`⏰ Текущее время: ${now.toLocaleString('ru-RU')}`);
+        console.log(`⏰ Текущее время: ${now.toLocaleString('ru-RU')} (${now.toISOString()})`);
 
         let notificationsSent = 0;
         let updated = false;
@@ -226,13 +245,20 @@ async function checkNotifications() {
         for (const task of tasks) {
             const taskDate = new Date(task.datetime);
             const timeDiff = taskDate.getTime() - now.getTime();
-            const hoursDiff = timeDiff / (1000 * 60 * 60);
             const minutesDiff = timeDiff / (1000 * 60);
+            const hoursDiff = minutesDiff / 60;
 
-            console.log(`📊 Задача "${task.title}": ${taskDate.toLocaleString('ru-RU')}, через ${hoursDiff.toFixed(2)} часов, уведомлено: ${task.notified}`);
+            console.log(`📊 Задача "${task.title}":`, {
+                scheduledTime: taskDate.toLocaleString('ru-RU'),
+                timeUntil: `${hoursDiff.toFixed(2)} часов`,
+                notified: task.notified
+            });
 
-            // Уведомление за 5 часов (если еще не уведомляли)
-            if (!task.notified && hoursDiff <= 5 && hoursDiff >= 4.98) {
+            // Пропускаем прошедшие задачи
+            if (timeDiff <= 0) continue;
+
+            // Уведомление за 5 часов (300 минут) - только один раз
+            if (!task.notified && minutesDiff <= 300 && minutesDiff > 295) {
                 console.log(`🎯 Отправляем уведомление за 5 часов для "${task.title}"`);
                 const sent = await sendNotification(task, 5, '5 часов');
                 if (sent) {
@@ -241,26 +267,26 @@ async function checkNotifications() {
                     notificationsSent++;
                 }
             }
-            // Уведомление за 1 час
-            else if (hoursDiff <= 1 && hoursDiff >= 0.98) {
+            // Уведомление за 1 час (60 минут)
+            else if (minutesDiff <= 60 && minutesDiff > 58) {
                 console.log(`🎯 Отправляем уведомление за 1 час для "${task.title}"`);
                 await sendNotification(task, 1, '1 час');
                 notificationsSent++;
             }
             // Уведомление за 30 минут
-            else if (minutesDiff <= 30 && minutesDiff >= 28) {
+            else if (minutesDiff <= 30 && minutesDiff > 28) {
                 console.log(`🎯 Отправляем уведомление за 30 минут для "${task.title}"`);
                 await sendNotification(task, 30, '30 минут');
                 notificationsSent++;
             }
             // Уведомление за 15 минут
-            else if (minutesDiff <= 15 && minutesDiff >= 13) {
+            else if (minutesDiff <= 15 && minutesDiff > 13) {
                 console.log(`🎯 Отправляем уведомление за 15 минут для "${task.title}"`);
                 await sendNotification(task, 15, '15 минут');
                 notificationsSent++;
             }
             // Уведомление за 5 минут
-            else if (minutesDiff <= 5 && minutesDiff >= 3) {
+            else if (minutesDiff <= 5 && minutesDiff > 3) {
                 console.log(`🎯 Отправляем уведомление за 5 минут для "${task.title}"`);
                 await sendNotification(task, 5, '5 минут');
                 notificationsSent++;
